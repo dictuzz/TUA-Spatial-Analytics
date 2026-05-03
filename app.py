@@ -142,35 +142,44 @@ def analyze_catchment_area(df_master, lat_val, lon_val, radius_km, col_lat, col_
 # -------------------------------------------------------------
 import os # Tambahkan ini di bagian atas (bersama import lainnya) jika belum ada
 
-# ... (kode lainnya) ...
-
 # -------------------------------------------------------------
 # 5. SIDEBAR CONFIG
 # -------------------------------------------------------------
 st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-bottom:8px;'>Database Master</div>", unsafe_allow_html=True)
 
-# ---> LOGIKA BARU UNTUK MEMBACA FILE TEMPLATE LOKAL <---
+# ---> LOGIKA BACA TEMPLATE LOKAL <---
 template_path = "AHS_ACTIVE_FORMATTED.xlsx"
-
 try:
-    # Buka file Excel fisik dalam mode 'read binary' (rb)
     with open(template_path, "rb") as file:
         template_bytes = file.read()
         
     st.sidebar.download_button(
         label="Unduh Template Master AHS",
         data=template_bytes,
-        file_name="AHS_ACTIVE_FORMATTED.xlsx", # Nama file saat pengguna mendownloadnya
+        file_name="AHS_ACTIVE_FORMATTED.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
 except FileNotFoundError:
-    # Munculkan peringatan jika file tidak ditemukan di folder project
     st.sidebar.error(f"File template '{template_path}' tidak ditemukan di sistem. Pastikan file sudah di-upload ke server.")
 
 uploaded_master = st.sidebar.file_uploader("Upload Excel File", type=["xlsx"], label_visibility="collapsed")
 
-# ... (sisa kode mapping kolom di bawahnya tetap sama) ...
+# ---> PASTIKAN VARIABEL MAPPING INI ADA SEBELUM MASUK KE MAIN UI <---
+st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-top:24px; margin-bottom:8px;'>Mapping Kolom Master (Sheet 1)</div>", unsafe_allow_html=True)
+m_id = st.sidebar.text_input("Kolom ID", "ID_PELANGGAN").upper()
+m_name = st.sidebar.text_input("Kolom Nama", "NAMA_PELANGGAN").upper()
+m_seg = st.sidebar.text_input("Kolom Kategori / Segmen", "SEGMEN").upper()
+m_lat = st.sidebar.text_input("Kolom Latitude", "LATITUDE").upper()
+m_lon = st.sidebar.text_input("Kolom Longitude", "LONGITUDE").upper()
+st.sidebar.info("💡 Tip: Semua kolom lain di luar 5 mapping di atas (seperti Avg SPS, Omzet, dll) akan OTOMATIS dideteksi oleh sistem.")
+
+st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-top:24px; margin-bottom:8px;'>Mapping Quadran (Sheet 2)</div>", unsafe_allow_html=True)
+q_kel = st.sidebar.text_input("Kolom Kelurahan", "KELURAHAN").upper()
+q_kec = st.sidebar.text_input("Kolom Kecamatan", "KECAMATAN").upper()
+q_kab = st.sidebar.text_input("Kolom Kabupaten", "KAB_KOT").upper()
+q_res = st.sidebar.text_input("Kolom Quadran", "QUADRAN").upper()
+
 # -------------------------------------------------------------
 # 6. MAIN UI
 # -------------------------------------------------------------
@@ -190,15 +199,17 @@ if uploaded_master:
         df_master.columns = df_master.columns.astype(str).str.strip().str.upper()
         df_quad.columns = df_quad.columns.astype(str).str.strip().str.upper()
         
+        # Karena m_seg sudah didefinisikan di sidebar atas, baris ini tidak akan error lagi
         if m_seg in df_master.columns:
             list_segmen = df_master[m_seg].dropna().astype(str).str.strip().str.upper().unique().tolist()
         else:
-            st.error(f"Kolom '{m_seg}' tidak ditemukan di Sheet 1.")
+            st.error(f"Kolom '{m_seg}' tidak ditemukan di Sheet 1. Pastikan nama kolom di Excel sama persis.")
             st.stop()
     except Exception as e:
         st.error(f"Gagal membaca file: {e}")
         st.stop()
 
+# ... (lanjutkan ke default_colors dan seterusnya seperti kode yang sebelumnya) ...
 default_colors = ["#2D88FF", "#FF9900", "#00A86B", "#E03E3E", "#6B52D1", "#D9730D", "#0F7B6C"]
 segmen_colors = {seg: default_colors[i % len(default_colors)] for i, seg in enumerate(list_segmen)}
 
