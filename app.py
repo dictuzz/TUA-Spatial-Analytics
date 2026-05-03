@@ -54,23 +54,6 @@ if 'analysis_result' not in st.session_state:
 # -------------------------------------------------------------
 # 3. FUNGSI GENERATOR TEMPLATE
 # -------------------------------------------------------------
-def buat_template_master():
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        pd.DataFrame({
-            "ID_PELANGGAN": ["TKO-001", "TKO-002", "GUD-001"],
-            "NAMA_PELANGGAN": ["Toko Maju", "Toko Sejahtera", "Gudang Utama"],
-            "SEGMEN": ["RETAIL", "RETAIL", "GUDANG"],
-            "LATITUDE": [-6.917464, -6.918000, -6.919000],
-            "LONGITUDE": [107.619123, 107.620000, 107.621000],
-            "AVG_SPS": [150, 80, 0],  # Kolom Dinamis Tambahan
-            "AVG_JUGS": [45, 20, 0]   # Kolom Dinamis Tambahan
-        }).to_excel(writer, index=False, sheet_name='Data_Outlet')
-        pd.DataFrame({
-            "KAB_KOT": ["BANDUNG", "BANDUNG"], "KECAMATAN": ["SUMUR BANDUNG", "SUMUR BANDUNG"],
-            "KELURAHAN": ["BRAGA", "MERDEKA"], "QUADRAN": ["Q1", "Q2"]
-        }).to_excel(writer, index=False, sheet_name='Panduan_Quadran')
-    return output.getvalue()
 
 def buat_template_batch():
     output = BytesIO()
@@ -157,24 +140,37 @@ def analyze_catchment_area(df_master, lat_val, lon_val, radius_km, col_lat, col_
 # -------------------------------------------------------------
 # 5. SIDEBAR CONFIG
 # -------------------------------------------------------------
+import os # Tambahkan ini di bagian atas (bersama import lainnya) jika belum ada
+
+# ... (kode lainnya) ...
+
+# -------------------------------------------------------------
+# 5. SIDEBAR CONFIG
+# -------------------------------------------------------------
 st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-bottom:8px;'>Database Master</div>", unsafe_allow_html=True)
-st.sidebar.download_button("Unduh Template Master (dgn contoh Avg SPS)", data=buat_template_master(), file_name="Template_Master_GeoMarketing.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
+# ---> LOGIKA BARU UNTUK MEMBACA FILE TEMPLATE LOKAL <---
+template_path = "AHS_ACTIVE_FORMATTED.xlsx"
+
+try:
+    # Buka file Excel fisik dalam mode 'read binary' (rb)
+    with open(template_path, "rb") as file:
+        template_bytes = file.read()
+        
+    st.sidebar.download_button(
+        label="Unduh Template Master AHS",
+        data=template_bytes,
+        file_name="AHS_ACTIVE_FORMATTED.xlsx", # Nama file saat pengguna mendownloadnya
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+except FileNotFoundError:
+    # Munculkan peringatan jika file tidak ditemukan di folder project
+    st.sidebar.error(f"File template '{template_path}' tidak ditemukan di sistem. Pastikan file sudah di-upload ke server.")
+
 uploaded_master = st.sidebar.file_uploader("Upload Excel File", type=["xlsx"], label_visibility="collapsed")
 
-st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-top:24px; margin-bottom:8px;'>Mapping Kolom Master (Sheet 1)</div>", unsafe_allow_html=True)
-m_id = st.sidebar.text_input("Kolom ID", "ID_PELANGGAN").upper()
-m_name = st.sidebar.text_input("Kolom Nama", "NAMA_PELANGGAN").upper()
-m_seg = st.sidebar.text_input("Kolom Kategori / Segmen", "SEGMEN").upper()
-m_lat = st.sidebar.text_input("Kolom Latitude", "LATITUDE").upper()
-m_lon = st.sidebar.text_input("Kolom Longitude", "LONGITUDE").upper()
-st.sidebar.info("💡 Tip: Semua kolom lain di luar 5 mapping di atas (seperti Avg SPS, Omzet, dll) akan OTOMATIS dideteksi oleh sistem.")
-
-st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-top:24px; margin-bottom:8px;'>Mapping Quadran (Sheet 2)</div>", unsafe_allow_html=True)
-q_kel = st.sidebar.text_input("Kolom Kelurahan", "KELURAHAN").upper()
-q_kec = st.sidebar.text_input("Kolom Kecamatan", "KECAMATAN").upper()
-q_kab = st.sidebar.text_input("Kolom Kabupaten", "KAB_KOT").upper()
-q_res = st.sidebar.text_input("Kolom Quadran", "QUADRAN").upper()
-
+# ... (sisa kode mapping kolom di bawahnya tetap sama) ...
 # -------------------------------------------------------------
 # 6. MAIN UI
 # -------------------------------------------------------------
