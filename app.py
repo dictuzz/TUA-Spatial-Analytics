@@ -16,7 +16,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder
 # -------------------------------------------------------------
 # 1. KONFIGURASI HALAMAN & CUSTOM CSS (STICKY LAYOUT)
 # -------------------------------------------------------------
-st.set_page_config(page_title="Geo-Marketing Enterprise", layout="wide")
+st.set_page_config(page_title="Spatial Analyzer", layout="wide")
 
 st.markdown("""
 <style>
@@ -146,8 +146,8 @@ q_res = st.sidebar.text_input("Kolom Quadran", "QUADRAN").upper()
 # -------------------------------------------------------------
 # 4. MAIN UI
 # -------------------------------------------------------------
-st.markdown("<div class='notion-h1'>Geo-Marketing Spatial Analytics</div>", unsafe_allow_html=True)
-st.markdown("<div class='notion-sub'>Platform proksimitas Asynchronous, pemetaan klaster, dan ekstraksi metadata.</div>", unsafe_allow_html=True)
+st.markdown("<div class='notion-h1'>Spatial Analytics</div>", unsafe_allow_html=True)
+st.markdown("<div class='notion-sub'>Tools untuk cek jarak dari satu titik ke titik lain.</div>", unsafe_allow_html=True)
 
 tab_single, tab_batch = st.tabs(["Dashboard Catchment Area", "Async Batch Processing"])
 
@@ -229,7 +229,7 @@ with tab_single:
                 
                 st.markdown(f"<div class='card-prop-name' style='font-size: 1rem; margin-top: 24px;'>Detail {res['total_catchment']} Outlet (Radius {res['radius_km']} KM)</div>", unsafe_allow_html=True)
                 if res['total_catchment'] == 0:
-                    st.info("Area kosong. Tidak ada outlet pesaing/partner.")
+                    st.info("Area kosong. Tidak ada outlet terdekat.")
                 else:
                     for seg in list_segmen:
                         if seg in res['catchment']:
