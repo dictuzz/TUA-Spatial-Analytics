@@ -4,6 +4,4 @@ requests
 openpyxl
 folium
 streamlit-folium
-aiohttp
 plotly
-streamlit-aggrid
