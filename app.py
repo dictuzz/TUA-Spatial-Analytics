@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import math
+import numpy as np  # DITAMBAHKAN untuk perhitungan cepat (vectorization)
 from io import BytesIO
 import folium
 from streamlit_folium import st_folium
@@ -35,7 +36,7 @@ if 'analysis_result' not in st.session_state:
     st.session_state.analysis_result = None
 
 # -------------------------------------------------------------
-# 2. KONSTANTA KOLOM
+# 2. KONSTANTA KOLOM & FILTER
 # -------------------------------------------------------------
 COL_ID = "ID_PELANGGAN"
 COL_NAME = "NAMA_PELANGGAN"
@@ -44,31 +45,54 @@ COL_STATUS = "STATUS_PELANGGAN"
 COL_LAT = "LATITUDE"
 COL_LON = "LONGITUDE"
 
+# FILTER STATIS (Sesuai Request)
+TARGET_SEGMENTS = ['AHS', 'WS', 'SO']
+TARGET_STATUS = ['ACT']
+
 # -------------------------------------------------------------
 # 3. FUNGSI DATA LOADING
 # -------------------------------------------------------------
 @st.cache_data(show_spinner="Memuat data quadran...")
 def load_quadran_data():
-    df = pd.read_excel("Quadran.xlsx", sheet_name=0)
-    df.columns = df.columns.astype(str).str.strip().str.upper()
-    for col in ['KELURAHAN', 'KECAMATAN', 'KAB_KOT', 'PROVINCE']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip().str.upper()
-    return df
+    try:
+        df = pd.read_excel("Quadran.xlsx", sheet_name=0)
+        df.columns = df.columns.astype(str).str.strip().str.upper()
+        for col in ['KELURAHAN', 'KECAMATAN', 'KAB_KOT', 'PROVINCE']:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip().str.upper()
+        return df
+    except FileNotFoundError:
+        return pd.DataFrame()
 
+@st.cache_data(show_spinner="Memuat data master...")
 def load_master(file_source):
-    df = pd.read_excel(file_source, sheet_name=0)
+    # Membaca data
+    if isinstance(file_source, str):
+        df = pd.read_excel(file_source, sheet_name=0)
+    else:
+        df = pd.read_excel(file_source, sheet_name=0)
+        
     df.columns = df.columns.astype(str).str.strip().str.upper()
+    
+    # Standardisasi kolom
     if COL_STATUS in df.columns:
         df[COL_STATUS] = df[COL_STATUS].astype(str).str.strip().str.upper()
     if COL_SEG in df.columns:
         df[COL_SEG] = df[COL_SEG].astype(str).str.strip().str.upper()
+        
     # Drop rows tanpa koordinat
     df = df.dropna(subset=[COL_LAT, COL_LON])
+    
+    # --- OPTIMASI: Filter awal di sini agar data di memory lebih kecil ---
+    # Filter Segmen
+    df = df[df[COL_SEG].isin(TARGET_SEGMENTS)]
+    # Filter Status
+    df = df[df[COL_STATUS].isin(TARGET_STATUS)]
+    
     return df
 
 # -------------------------------------------------------------
-# 4. FUNGSI LOGIKA
+# 4. FUNGSI LOGIKA (DIOPTIMASI)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=86400)
 def cari_alamat(lat, lon):
@@ -92,6 +116,9 @@ def detect_quadran(lat, lon, df_quadran):
     kel, kec, kab = cari_alamat(lat, lon)
     kel_u = str(kel).strip().upper()
     kec_u = str(kec).strip().upper()
+
+    if df_quadran.empty:
+        return "N/A (Data Quadran Missing)", kel, kec, kab
 
     # Priority 1: Exact match KELURAHAN
     match = df_quadran[df_quadran['KELURAHAN'] == kel_u]
@@ -117,23 +144,30 @@ def detect_quadran(lat, lon, df_quadran):
 
     return "N/A", kel, kec, kab
 
-def hitung_jarak_udara(lat1, lon1, lat2, lon2):
-    try:
-        return math.sqrt((float(lat1) - float(lat2))**2 + (float(lon1) - float(lon2))**2) * 111.12
-    except:
-        return 999999
-
 def get_best_match(df_seg, lat_val, lon_val):
-    """Cari outlet terdekat dari dataframe yang sudah difilter per segmen"""
+    """Cari outlet terdekat menggunakan Vectorization (Jauh lebih cepat dari apply/loop)"""
     if df_seg.empty:
         return None
-    df_s = df_seg.copy()
-    df_s['tmp_dist'] = df_s.apply(lambda r: hitung_jarak_udara(lat_val, lon_val, r[COL_LAT], r[COL_LON]), axis=1)
-    best = df_s.loc[df_s['tmp_dist'].idxmin()]
+    
+    # Menggunakan NumPy untuk perhitungan jarak sekaligus (Vectorization)
+    # Rumus: Sqrt((lat1-lat2)^2 + (lon1-lon2)^2) * 111.12
+    lat1, lon1 = float(lat_val), float(lon_val)
+    lats = df_seg[COL_LAT].astype(float).values
+    lons = df_seg[COL_LON].astype(float).values
+    
+    # Hitung jarak semua baris sekaligus
+    distances = np.sqrt((lats - lat1)**2 + (lons - lon1)**2) * 111.12
+    
+    # Cari index jarak minimum
+    min_idx = distances.argmin()
+    
+    # Ambil baris terdekat
+    best = df_seg.iloc[min_idx]
+    
     return {
         "id": best[COL_ID], "nama": best[COL_NAME],
         "status": best[COL_STATUS],
-        "jarak_udara": round(best['tmp_dist'], 2),
+        "jarak_udara": round(distances[min_idx], 2),
         "lat": float(best[COL_LAT]), "lon": float(best[COL_LON]),
     }
 
@@ -148,12 +182,21 @@ def fetch_osrm(lat1, lon1, lat2, lon2):
     return "N/A", "N/A"
 
 def analyze_catchment_area(df_filtered, lat_val, lon_val, radius_km):
-    """Hitung outlet dalam radius, group by SEGMEN lalu sub-group by STATUS"""
+    """Hitung outlet dalam radius menggunakan Vectorization (Anti-Lambat)"""
+    if df_filtered.empty:
+        return {}, 0
+
     df_t = df_filtered.copy()
-    df_t['jarak_km'] = df_t.apply(lambda r: hitung_jarak_udara(lat_val, lon_val, r[COL_LAT], r[COL_LON]), axis=1)
+    
+    # --- OPTIMASI UTAMA: Vectorization untuk perhitungan jarak ---
+    # Tidak menggunakan .apply() lagi
+    lat1, lon1 = float(lat_val), float(lon_val)
+    df_t['jarak_km'] = np.sqrt((df_t[COL_LAT].astype(float) - lat1)**2 + (df_t[COL_LON].astype(float) - lon1)**2) * 111.12
+    
     df_in = df_t[df_t['jarak_km'] <= radius_km]
 
     summary = {}
+    # Loop grouping hanya untuk data yang sudah masuk radius (biasanya sedikit)
     for seg in sorted(df_in[COL_SEG].unique()):
         df_seg = df_in[df_in[COL_SEG] == seg]
         status_group = {}
@@ -176,6 +219,9 @@ def analyze_catchment_area(df_filtered, lat_val, lon_val, radius_km):
 st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-bottom:8px;'>Database Master</div>", unsafe_allow_html=True)
 uploaded_master = st.sidebar.file_uploader("Upload Excel Master (opsional)", type=["xlsx"])
 
+# Info Filter Statis
+st.sidebar.info(f"**Filter Aktif:**\n- Segmen: {', '.join(TARGET_SEGMENTS)}\n- Status: {', '.join(TARGET_STATUS)}")
+
 # Load data
 try:
     df_quadran = load_quadran_data()
@@ -185,82 +231,70 @@ except Exception as e:
 
 try:
     if uploaded_master:
-        df_master_raw = load_master(uploaded_master)
+        df_master = load_master(uploaded_master)
     else:
-        df_master_raw = load_master("AO_ALL_Segmen.xlsx")
+        # Pastikan file default ada
+        df_master = load_master("AO_ALL_Segmen.xlsx")
 except Exception as e:
     st.error(f"Error memuat data master: {e}")
-    st.stop()
-
-# Filter SEGMEN
-st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-top:16px; margin-bottom:8px;'>Filter Segmen</div>", unsafe_allow_html=True)
-all_segmen = sorted([s for s in df_master_raw[COL_SEG].dropna().unique().tolist() if s != 'NAN'])
-selected_segmen = st.sidebar.multiselect("Pilih Segmen", all_segmen, default=all_segmen, label_visibility="collapsed")
-
-# Filter STATUS_PELANGGAN
-st.sidebar.markdown("<div style='font-size: 0.85rem; font-weight: 600; color: var(--text-color); opacity:0.6; text-transform: uppercase; margin-top:16px; margin-bottom:8px;'>Filter Status Pelanggan</div>", unsafe_allow_html=True)
-all_status = sorted([s for s in df_master_raw[COL_STATUS].dropna().unique().tolist() if s != 'NAN'])
-selected_status = st.sidebar.multiselect("Pilih Status", all_status, default=["ACT"], label_visibility="collapsed")
-
-# Apply filters
-df_master = df_master_raw[
-    (df_master_raw[COL_SEG].isin(selected_segmen)) &
-    (df_master_raw[COL_STATUS].isin(selected_status))
-].copy()
+    # Dummy data untuk testing jika file tidak ada, agar app tidak crash
+    df_master = pd.DataFrame(columns=[COL_ID, COL_NAME, COL_SEG, COL_STATUS, COL_LAT, COL_LON])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown(f"<div style='font-size: 0.8rem; opacity: 0.5;'>Data terfilter: <b>{len(df_master):,}</b> outlet</div>", unsafe_allow_html=True)
+st.sidebar.markdown(f"<div style='font-size: 0.8rem; opacity: 0.5;'>Total Outlet (AHS/WS/SO - ACT): <b>{len(df_master):,}</b></div>", unsafe_allow_html=True)
 
-# Warna segmen
-default_colors = ["#2D88FF", "#FF9900", "#00A86B", "#E03E3E", "#6B52D1", "#D9730D", "#F5A623", "#50E3C2"]
-segmen_colors = {seg: default_colors[i % len(default_colors)] for i, seg in enumerate(all_segmen)}
+# Warna segmen (Sesuai target)
+default_colors = ["#2D88FF", "#FF9900", "#00A86B"] # Biru, Orange, Hijau
+segmen_colors = {seg: default_colors[i] for i, seg in enumerate(TARGET_SEGMENTS)}
 
 # -------------------------------------------------------------
 # 6. MAIN UI
 # -------------------------------------------------------------
 st.markdown("<div class='notion-h1'>Spatial Analytics</div>", unsafe_allow_html=True)
-st.markdown("<div class='notion-sub'>Analisa jarak outlet terdekat per segmen dari titik target.</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='notion-sub'>Analisa jarak outlet terdekat untuk segmen {', '.join(TARGET_SEGMENTS)} (Status ACT).</div>", unsafe_allow_html=True)
 
 if df_master.empty:
-    st.warning("Tidak ada data setelah filter. Sesuaikan filter Segmen dan Status di sidebar.")
-    st.stop()
+    st.warning("Tidak ada data yang tersedia atau tidak sesuai filter.")
+else:
+    st.markdown("<div class='card-prop-name'>Parameter Ekspansi</div>", unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns([2, 1.5, 1.5, 1])
+    in_name = c1.text_input("Nama Target", "Target Baru")
+    in_lat = c2.text_input("Latitude", "-6.914744")
+    in_lon = c3.text_input("Longitude", "107.609810")
+    radius_filter = c4.number_input("Radius (KM)", min_value=0.1, max_value=50.0, value=3.0, step=0.1)
 
-st.markdown("<div class='card-prop-name'>Parameter Ekspansi</div>", unsafe_allow_html=True)
-c1, c2, c3, c4 = st.columns([2, 1.5, 1.5, 1])
-in_name = c1.text_input("Nama Target", "Target Baru")
-in_lat = c2.text_input("Latitude", "-6.914744")
-in_lon = c3.text_input("Longitude", "107.609810")
-radius_filter = c4.number_input("Radius (KM)", min_value=0.1, max_value=50.0, value=3.0, step=0.1)
+    if st.button("Jalankan Analisis", type="primary"):
+        with st.spinner("Menganalisis data..."):
+            try:
+                lat_v, lon_v = float(in_lat), float(in_lon)
 
-if st.button("Jalankan Analisis", type="primary"):
-    with st.spinner("Membangun Dashboard..."):
-        lat_v, lon_v = float(in_lat), float(in_lon)
+                # Deteksi Quadran
+                quad, kel, kec, kab = detect_quadran(lat_v, lon_v, df_quadran)
 
-        # Deteksi Quadran dari Quadran.xlsx
-        quad, kel, kec, kab = detect_quadran(lat_v, lon_v, df_quadran)
+                # Cari terdekat per segmen + OSRM
+                matches = {}
+                for seg in TARGET_SEGMENTS:
+                    df_seg = df_master[df_master[COL_SEG] == seg]
+                    if not df_seg.empty:
+                        best = get_best_match(df_seg, lat_v, lon_v)
+                        if best:
+                            darat, menit = fetch_osrm(lat_v, lon_v, best['lat'], best['lon'])
+                            best['jarak_darat'] = darat
+                            best['waktu_tempuh'] = menit
+                            matches[seg] = best
 
-        # Cari terdekat per segmen + OSRM
-        active_segmen = [s for s in selected_segmen if s in df_master[COL_SEG].unique()]
-        matches = {}
-        for seg in active_segmen:
-            df_seg = df_master[df_master[COL_SEG] == seg]
-            best = get_best_match(df_seg, lat_v, lon_v)
-            if best:
-                darat, menit = fetch_osrm(lat_v, lon_v, best['lat'], best['lon'])
-                best['jarak_darat'] = darat
-                best['waktu_tempuh'] = menit
-                matches[seg] = best
+                # Catchment area
+                catchment_summary, total_in_radius = analyze_catchment_area(df_master, lat_v, lon_v, radius_filter)
 
-        # Catchment area
-        catchment_summary, total_in_radius = analyze_catchment_area(df_master, lat_v, lon_v, radius_filter)
-
-        st.session_state.analysis_result = {
-            "name": in_name, "lat": lat_v, "lon": lon_v, "quad": quad,
-            "matches": matches, "catchment": catchment_summary,
-            "total_catchment": total_in_radius, "radius_km": radius_filter,
-            "admin": {"kel": kel, "kec": kec, "kab": kab},
-            "active_segmen": active_segmen,
-        }
+                st.session_state.analysis_result = {
+                    "name": in_name, "lat": lat_v, "lon": lon_v, "quad": quad,
+                    "matches": matches, "catchment": catchment_summary,
+                    "total_catchment": total_in_radius, "radius_km": radius_filter,
+                    "admin": {"kel": kel, "kec": kec, "kab": kab},
+                    "active_segmen": TARGET_SEGMENTS,
+                }
+            except ValueError:
+                st.error("Latitude dan Longitude harus berupa angka.")
 
 # --- TAMPILKAN HASIL ---
 if st.session_state.analysis_result:
@@ -297,7 +331,7 @@ if st.session_state.analysis_result:
                         st.markdown(f"<span style='color:#2D88FF;'>**Jarak Darat:** {m['jarak_darat']} KM</span>", unsafe_allow_html=True)
                         st.markdown(f"<span style='color:#2D88FF;'>**Waktu Tempuh:** {m['waktu_tempuh']} Menit</span>", unsafe_allow_html=True)
 
-        # Catchment area detail (group by SEGMEN → STATUS)
+        # Catchment area detail
         st.markdown(f"<div class='card-prop-name' style='font-size: 1rem; margin-top: 24px;'>Detail {res['total_catchment']} Outlet dalam Radius {res['radius_km']} KM</div>", unsafe_allow_html=True)
         if res['total_catchment'] == 0:
             st.info("Tidak ada outlet dalam radius ini.")
